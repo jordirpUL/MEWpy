@@ -879,7 +879,6 @@ class SRFBA(pFBA):
 
         constraints = {**constraints, **initial_state}
         solver_kwargs['constraints'] = constraints
-
         solution = self.solver.solve(**{**solver_kwargs,
                                         'get_values': True})
         return solution

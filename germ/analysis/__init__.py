@@ -10,7 +10,7 @@ from .coregflux import CoRegFlux, predict_gene_expression
 from .metabolic_analysis import slim_fba, slim_pfba, fva, single_gene_deletion, single_reaction_deletion
 from .regulatory_analysis import regulatory_truth_table, get_real_initial_state
 from .integrated_analysis import (slim_rfba, slim_srfba, slim_prom, slim_coregflux,
-                                  ifva, isingle_regulator_deletion, isingle_reaction_deletion, isingle_gene_deletion,
+                                  ifva, ifva_parallel, isingle_regulator_deletion, isingle_reaction_deletion, isingle_gene_deletion,
                                   find_conflicts, regulatory_single_gene_deletion)
 
 

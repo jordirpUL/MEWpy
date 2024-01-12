@@ -327,7 +327,7 @@ class ModelSolution:
         """
         results = {}
 
-        for variable in self.model.yield_exchanges():
+        for variable in self.model.yield_reactions():
 
             if variable.is_reaction():
                 _id, v_type, x = self._get_variable_info(variable)

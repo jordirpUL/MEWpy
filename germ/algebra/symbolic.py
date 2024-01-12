@@ -396,7 +396,8 @@ class And(Boolean):
         operator = operators.get(And, None)
 
         if operator is not None:
-             return max(0.1,float(operator([left, right])))
+            #return max(0.01,float(operator([left, right])))
+            return float(operator([left, right]))
 
         #return solution_decode(float(left) & float(right))
         return float(min(left, right))
@@ -427,7 +428,8 @@ class Or(Boolean):
         operator = operators.get(Or, None)
 
         if operator is not None:
-            return max(0.1,float(operator([left, right])))
+            #return max(0.01,float(operator([left, right])))
+            return float(operator([left, right]))
 
         #print("Returning MAX inside OR:",solution_decode(float(left) | float(right)))
         #return solution_decode(float(left) | float(right))
