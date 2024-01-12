@@ -1,10 +1,12 @@
 from collections import defaultdict
+from multiprocessing import Pool
 from typing import Union, TYPE_CHECKING, Dict, Tuple, Optional, Sequence
 
 import pandas as pd
 
 from copy import deepcopy
 import os
+import multiprocessing
 
 from mewpy.util.constants import ModelConstants
 from .analysis_utils import run_method_and_decode
@@ -197,14 +199,65 @@ def ifva(model: Union['Model', 'MetabolicModel', 'RegulatoryModel'],
 
     result = defaultdict(list)
     for rxn in reactions:
-        min_val, _ = run_method_and_decode(method=lp, objective={rxn: 1.0}, constraints=constraints, minimize=True)
+        min_val, _ = run_method_and_decode(method=lp, objective={rxn: 1.0}, initial_state=initial_state, constraints=constraints, minimize=True)
         result[rxn].append(min_val)
 
-        max_val, _ = run_method_and_decode(method=lp, objective={rxn: 1.0}, constraints=constraints, minimize=False)
+        max_val, _ = run_method_and_decode(method=lp, objective={rxn: 1.0}, initial_state=initial_state, constraints=constraints, minimize=False)
         result[rxn].append(max_val)
 
     return pd.DataFrame.from_dict(data=result, orient='index', columns=['minimum', 'maximum'])
 
+def process_reaction(args):
+    lp, rxn, constraints = args
+    min_val, _ = run_method_and_decode(method=lp, objective={rxn: 1.0}, constraints=constraints, minimize=True)
+    max_val, _ = run_method_and_decode(method=lp, objective={rxn: 1.0}, constraints=constraints, minimize=False)
+    return rxn, min_val, max_val
+
+def ifva_parallel(model: Union['Model', 'MetabolicModel', 'RegulatoryModel'],
+                  fraction: float = 1.0,
+                  reactions: Sequence[str] = None,
+                  objective: Union[str, Dict[str, float]] = None,
+                  constraints: Dict[str, Tuple[float, float]] = None,
+                  initial_state: Dict[str, float] = None,
+                  method: str = 'srfba',
+                  num_processes: int = None) -> pd.DataFrame:
+
+    if not reactions:
+        reactions = model.reactions.keys()
+
+    if objective:
+        if hasattr(objective, 'keys'):
+            obj = next(iter(objective.keys()))
+        else:
+            obj = str(objective)
+    else:
+        obj = next(iter(model.objective)).id
+
+    if not constraints:
+        constraints = {}
+
+    LP = INTEGRATED_ANALYSIS_METHODS[method]
+
+    _lp = LP(model).build()
+    objective_value, _ = run_method_and_decode(method=_lp, objective=objective, constraints=constraints,
+                                               initial_state=initial_state)
+    constraints[obj] = (fraction * objective_value, ModelConstants.REACTION_UPPER_BOUND)
+
+    lp = LP(model).build()
+
+    result = defaultdict(list)
+    args_list = [(lp, rxn, constraints) for rxn in reactions]
+
+    if num_processes is None:
+        num_processes = multiprocessing.cpu_count() - 2
+
+    with Pool(num_processes) as pool:
+        results = pool.map(process_reaction, args_list)
+
+    for rxn, min_val, max_val in results:
+        result[rxn].extend([min_val, max_val])
+
+    return pd.DataFrame.from_dict(data=result, orient='index', columns=['minimum', 'maximum'])
 
 def isingle_gene_deletion(model: Union['Model', 'MetabolicModel', 'RegulatoryModel'],
                           genes: Sequence[str] = None,
@@ -525,6 +578,8 @@ def _decode_interactions(model: Union['Model', 'MetabolicModel', 'RegulatoryMode
     :param state: the state of the model
     :return: a dictionary with the state of each gene
     """
+    
+    print("[Module _decode_interactions] running")
     target_state = {}
     for interaction in model.yield_interactions():
 

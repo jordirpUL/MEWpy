@@ -171,7 +171,7 @@ def continuous_gpr(model: Union['Model', 'MetabolicModel', 'RegulatoryModel'],
                    state: Dict[str, float],
                    scale: bool = False):
     operators = {And: min, Or: max}
-
+    print("Running analysis_utils.continuous_gpr, operators=",operators)
     states = {}
     for reaction in model.yield_reactions():
 
