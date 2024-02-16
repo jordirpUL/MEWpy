@@ -169,7 +169,7 @@ class PROM(FBA):
 
             # for each reaction associated with this single target
             for reaction in target.yield_reactions():
-
+                print(reaction.id)
                 # if the gpr has been evaluated previously to zero,
                 # it means that the metabolic genes regulated by this regulator can affect the state of the
                 # reaction. Thus, the reaction bounds can be changed using PROM probability.
@@ -180,9 +180,10 @@ class PROM(FBA):
 
                 if interaction_probability >= 1:
                     continue
-
+                print("--------------------------------------------")
                 # reaction old bounds
                 rxn_lb, rxn_ub = tuple(prom_constraints[reaction.id])
+                print("\tBoundaries (original): (",rxn_lb,rxn_ub,")")
 
                 # probability flux is the upper or lower bound that this reaction can take
                 # when the regulator is KO. This is calculated as follows:
@@ -211,6 +212,8 @@ class PROM(FBA):
                     continue
 
                 prom_constraints[reaction.id] = (rxn_lb, rxn_ub)
+                print("\tBoundaries (final): (",rxn_lb,rxn_ub,")")
+                print("--------------------------------------------")
 
         solution = self.solver.solve(**{**solver_kwargs,
                                         'get_values': True,
@@ -351,7 +354,7 @@ def target_regulator_interaction_probability(model: Union['Model', 'MetabolicMod
     interactions_probabilities = {}
 
     for interaction in model.yield_interactions():
-
+        print("Interaction:",interaction)
         target = interaction.target
 
         if not interaction.regulators or target.id not in expression.index:
@@ -374,7 +377,7 @@ def target_regulator_interaction_probability(model: Union['Model', 'MetabolicMod
             target_expression_1_regulator = target_expression[regulator_binary == 1]
             target_expression_0_regulator = target_expression[regulator_binary == 0]
 
-            if len(target_expression_1_regulator) == 0 and len(target_expression_0_regulator) == 0:
+            if len(target_expression_1_regulator) == 0 or len(target_expression_0_regulator) == 0:
                 missed_interactions[(target.id, regulator.id)] = 1
                 interactions_probabilities[(target.id, regulator.id)] = 1
                 continue

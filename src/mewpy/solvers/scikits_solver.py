@@ -21,13 +21,9 @@ Author Vitor Pereira
 ##############################################################################
 """
 from .ode import ODEMethod, SolverConfigurations, ODESolver
-from scikits.odes import ode
-import numpy as np
+from scikits.odes.odeint import odeint
 import warnings
-
 methods = {
-    ODEMethod.BDF : 'cvode',
-    
 }
 
 
@@ -37,54 +33,25 @@ class ScikitsODESolver(ODESolver):
     """
 
     def __init__(self, func, method):
-        """
-          Integrate a system of ordinary differential equations.\n,
-          *odeint* is a wrapper around the ode class, as a confenience function to,
-          quickly integrate a system of ode.
-          Solves the initial value problem for stiff or non-stiff systems,
-          of first order ode's:,
-              rhs = dy/dt = fun(t, y),
-          where y can be a vector, then rhsfun must be a function computing rhs with\n",
-          signature:,
-              rhsfun(t, y, rhs)",
-          storing the computated dy/dt in the rhs array passed to the function.
-          All sundials methods, except the Runge-Kutta method, are implicit.
-        """
-            
         self.func = func
-        
-        # makes the function implicit
-        def rhs(t,y,out):
-            res = self.func(t,y)
-            for i, v in enumerate(res):
-                out[i]=v
-        
         if method in methods.keys():
             self.method = method
         else:
-            self.method='cvode'
-            
+            warnings.warn(f'Method {method} is unavailable.')
+
         self.initial_condition = None
-        self.solver = ode(self.method,rhs)
 
     def set_initial_condition(self, initial_condition):
         self.initial_condition = initial_condition
 
-    def solve(self, y0, t_points, **kwargs):
+    def solve(self, y0, t_span, **kwargs):
         """
-        Returns the solver method from package.
+        Returns the solver method from odespy package.
 
         :param func: function with ODE system.
         :return: an instance of odeSolver
 
         """
-        sol = self.solver.solve(t_points,y0)
-        array = np.array(sol.values.y)
-        transposed_array = array.T
-        y = transposed_array.tolist()
-        C = sol.values.y[-1]
-        t = sol.values.t
-        
-        return C, t , y
-
-        
+        sol = odeint(self.func, t_span, y0)
+        C = [c[-1] for c in sol.y]
+        return C, sol.t, sol.y

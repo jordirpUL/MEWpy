@@ -565,7 +565,7 @@ class LinearProblem:
             new_coef = {}
 
             for var, coef in coefficient.items():
-
+                #print("_update_constraint_coefs: var:",var, "coef:",coef)
                 if var in self._sub_cols:
 
                     sub_var = var

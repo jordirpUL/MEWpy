@@ -27,8 +27,7 @@ from mewpy.model.kinetic import ODEModel
 from mewpy.solvers import (KineticConfigurations,
                            SolverConfigurations,
                            ODEStatus,
-                           ode_solver_instance,
-                           get_default_ode_solver)
+                           ode_solver_instance)
 import warnings
 import numpy as np
 from typing import List, Dict, Tuple, Union, TYPE_CHECKING
@@ -63,29 +62,22 @@ def kinetic_solve(model: ODEModel,
     :rtype: _type_
     """
 
-    rates = OrderedDict()    
+    rates = OrderedDict()
     f = model.get_ode(r_dict=rates, params=parameters, factors=factors)
     solver = ode_solver_instance(f, KineticConfigurations.SOLVER_METHOD)
 
-    try:
-        C, t, y = solver.solve(y0, time_steps)
+    C, t, y = solver.solve(y0, time_steps)
 
-        for c in C:
-            if c < -1 * SolverConfigurations.RELATIVE_TOL:
-                return ODEStatus.ERROR, {}, {}
+    for c in C:
+        if c < -1 * SolverConfigurations.RELATIVE_TOL:
+            return ODEStatus.ERROR, {}, {}
 
-        # values bellow solver precision will be set to 0
-        rates.update({k: 0 for k, v in rates.items() if (
-                    v < SolverConfigurations.ABSOLUTE_TOL
-                    and v > - SolverConfigurations.ABSOLUTE_TOL)})
-        conc = OrderedDict(zip(model.metabolites.keys(), C))
-        
-        return ODEStatus.OPTIMAL, rates, conc, t, y
-        
-    except Exception as e:
-        return ODEStatus.ERROR, None, None, None, None
-    
-    
+    # values bellow solver precision will be set to 0
+    rates.update({k: 0 for k, v in rates.items() if (
+                  v < SolverConfigurations.ABSOLUTE_TOL
+                  and v > - SolverConfigurations.ABSOLUTE_TOL)})
+    conc = OrderedDict(zip(model.metabolites.keys(), C))
+    return ODEStatus.OPTIMAL, rates, conc, t, y
 
 
 class KineticThread(Process):
@@ -179,11 +171,8 @@ class KineticSimulationResult(SimulationResult):
         self.concentrations = concentrations
         self.t = t
         self.y = y
-        if concentrations:
-            self.m_indexes = {k: v for v, k in enumerate(concentrations.keys())}
-        else: 
-            self.m_indexes = None
-            
+        self.m_indexes = {k: v for v, k in enumerate(concentrations.keys())}
+
     def get_y(self, m_id):
         if m_id in self.m_indexes:
             return np.array(self.y).T[:, self.m_indexes[m_id]]
@@ -289,7 +278,7 @@ class KineticSimulation(SimulationInterface):
 
     def simulate(self,
                  parameters: Dict[str, float] = None,
-                 initcon: Dict[str,float] = None,
+                 initcon: List[float] = None,
                  factors: Dict[str, float] = None,
                  t_points: List[float] = None) -> KineticSimulationResult:
         """
@@ -312,7 +301,7 @@ class KineticSimulation(SimulationInterface):
         sstateConc = None
         t = None
         y = None
-        params = self.parameters.copy()
+        params = self.parameters
         if parameters:
             params.update(parameters)
 

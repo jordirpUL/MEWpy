@@ -1,11 +1,12 @@
 from itertools import product
+from statistics import mean
 from typing import Dict, Union, TYPE_CHECKING, Callable, Any, Type
 
 import pandas as pd
 
 from .algebra_utils import solution_decode, _walk
 from .parsing import tokenize
-from .symbolic import NoneAtom, Symbolic, Symbol
+from .symbolic import NoneAtom, Symbolic, Symbol, And, Or
 
 if TYPE_CHECKING:
     from mewpy.germ.variables import Gene, Metabolite, Reaction, Regulator, Interaction, Target, Variable
@@ -250,21 +251,23 @@ class Expression:
 
         :return: The solution of the Symbolic expression evaluation as int, float or Any type.
         """
-        res = self.symbolic.evaluate(values=values, operators=operators, default=missing_value, **kwargs)
-
-        res = solution_decode(res, decoder)
+        res = float(self.symbolic.evaluate(values=values, operators=operators, default=missing_value, **kwargs))
+        #print("res_evaluate:",res)
+        return res
+        #res = solution_decode(res, decoder)
 
         # if a coefficient is provided and the expression is evaluated to true, the respective coefficient will
         # be returned
-        if coefficient is None:
-            return res
+        # print("coefficient:", coefficient)
+        # if coefficient is None:
+        #     return res
 
-        else:
+        # else:
 
-            if res:
-                return coefficient
+        #     if res:
+        #         return coefficient
 
-            return res
+        #     return res
 
     def truth_table(self,
                     values: Dict[str, float] = None,
@@ -283,7 +286,7 @@ class Expression:
         can take during expression evaluation. If the values dictionary is not provided,
         variables' values/states are retrieved from the variables' coefficients using the strategy
         defined by the strategy's parameter.
-        :param strategy: The truth table can be calculated using the maximum or minimum value
+        :param strategy: The truth table can be calculated using the maximum, the minimum or the mean value
         in the variables' coefficients. Otherwise, the truth table is calculated using all variables' coefficients.
         :param coefficient: The value to be returned in case the expression is evaluated to True. Otherwise,
         binary values 0 or 1 are returned.
@@ -316,6 +319,8 @@ class Expression:
                         state[var_id] = max(var.coefficients)
                     elif strategy == 'min':
                         state[var_id] = min(var.coefficients)
+                    elif strategy == 'mean':
+                        state[var_id] = mean(var.coefficients)
                     else:
                         state[var_id] = var.coefficients
 
@@ -326,6 +331,14 @@ class Expression:
                                             operators=operators,
                                             decoder=decoder)
             truth_table.append(state)
+            
+        elif strategy == 'mean':            
+            state['result'] = self.evaluate(values=state,
+                                            coefficient=coefficient,
+                                            operators={Or:mean,And:mean},
+                                            decoder=decoder)
+            truth_table.append(state)
+            
 
         elif strategy == 'all':
             variables = list(self.variables.keys())
@@ -340,6 +353,6 @@ class Expression:
                 truth_table.append(mid_state)
 
         else:
-            raise ValueError('coefficients must be max, min or all')
+            raise ValueError('coefficients must be max, min, mean or all')
 
         return pd.DataFrame(truth_table)
