@@ -266,7 +266,9 @@ def _run_method_and_decode(objective: Union[str, Dict[str, float]] = None,
     return objective_value, status
 
 def process_reaction(args):
+    #print("process_reaction")
     rxn, constraints, initial_state = args
+    #print("initial_state = ",initial_state)
     if initial_state is None:
         initial_state = {}
     # Add more print statements to inspect the contents of lp, rxn, constraints if needed
