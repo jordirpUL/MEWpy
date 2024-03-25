@@ -7,8 +7,11 @@ import pandas as pd
 from copy import deepcopy
 import os
 import multiprocessing
+from cobra.util import ProcessPool
+import numpy as np
 
 from mewpy.util.constants import ModelConstants
+from mewpy.germ.analysis.analysis_utils import decode_solver_solution
 from .analysis_utils import run_method_and_decode
 from .metabolic_analysis import fva
 from .coregflux import CoRegFlux
@@ -23,7 +26,7 @@ if TYPE_CHECKING:
 
 INTEGRATED_ANALYSIS_METHODS = {'rfba': RFBA,
                                'srfba': SRFBA}
-
+    
 
 def slim_rfba(model: Union['Model', 'MetabolicModel', 'RegulatoryModel'],
               initial_state: Dict[str, float] = None,
@@ -194,7 +197,7 @@ def ifva(model: Union['Model', 'MetabolicModel', 'RegulatoryModel'],
     objective_value, _ = run_method_and_decode(method=_lp, objective=objective, constraints=constraints,
                                                initial_state=initial_state)
     constraints[obj] = (fraction * objective_value, ModelConstants.REACTION_UPPER_BOUND)
-
+    print("FVA objective value = ",objective_value)
     lp = LP(model).build()
 
     result = defaultdict(list)
@@ -207,11 +210,74 @@ def ifva(model: Union['Model', 'MetabolicModel', 'RegulatoryModel'],
 
     return pd.DataFrame.from_dict(data=result, orient='index', columns=['minimum', 'maximum'])
 
+def _init_worker(model_path, trn_path, method='srfba'):
+    """Initialize based on a model identifier instead of the model object itself."""
+    from mewpy.io import Reader, Engines, read_model
+
+    global _method
+    print("_init_worker")
+    print("Reading model...")
+    sbml_fname = model_path #f"..\\results\\SIRT1\\diet_models\\Recon3D_Western_diet.xml"
+    trn_fname = trn_path #"..\\data\\pypath\\grouped_sirt1_trn_manually_curated.csv"
+    core_gem_reader = Reader(Engines.MetabolicSBML, sbml_fname)
+    core_trn_reader = Reader(Engines.BooleanRegulatoryCSV,
+                                 trn_fname, sep=',', id_col=0, rule_col=1, header=0)
+    model = read_model(core_gem_reader, core_trn_reader)
+    print("setting sinks to 0")
+    for rxn in model.reactions.keys():
+        if "sink" in rxn:
+            model.get(rxn).bounds = (0,0)
+    model.objective = {"biomass_reaction":1.0, "R_SIRT1":0.001}
+    print("Building LP...")
+    # Assuming you can load the model using a path or identifier:
+    LP = INTEGRATED_ANALYSIS_METHODS[method]
+    _method = LP(model).build()
+    print("LP build")
+
+
+def _run_method_and_decode(objective: Union[str, Dict[str, float]] = None,
+                          constraints: Dict[str, Tuple[float, float]] = None,
+                          **kwargs) -> Tuple[float, str]:
+    """
+    It runs a method and decodes the objective value and status returned by the solver.
+    :param method: the method to be run
+    :param objective: an alternative temporary objective function
+    :param constraints: alternative temporary constraints
+    :param kwargs: additional arguments to be passed to the method
+    :return: the objective value and the status of the solution
+    """
+    global _method
+    solver_kwargs = {'get_values': False}
+
+    if objective:
+        if hasattr(objective, 'keys'):
+            solver_kwargs['linear'] = objective.copy()
+        else:
+            solver_kwargs['linear'] = {str(objective): 1.0}
+
+    if constraints:
+        solver_kwargs['constraints'] = constraints
+
+    if 'minimize' in kwargs:
+        solver_kwargs['minimize'] = kwargs['minimize']
+
+    solution = _method.optimize(to_solver=True, solver_kwargs=solver_kwargs, **kwargs)
+    objective_value, status = decode_solver_solution(solution=solution)
+    return objective_value, status
+
 def process_reaction(args):
-    lp, rxn, constraints = args
-    min_val, _ = run_method_and_decode(method=lp, objective={rxn: 1.0}, constraints=constraints, minimize=True)
-    max_val, _ = run_method_and_decode(method=lp, objective={rxn: 1.0}, constraints=constraints, minimize=False)
+    rxn, constraints, initial_state = args
+    if initial_state is None:
+        initial_state = {}
+    # Add more print statements to inspect the contents of lp, rxn, constraints if needed
+    # For example:
+    # print("Contents of lp:", lp)
+    # print("Contents of rxn:", rxn)
+    # print("Contents of constraints:", constraints)
+    min_val, _ = _run_method_and_decode(objective={rxn: 1.0}, constraints=constraints, minimize=True, initial_state = initial_state)
+    max_val, _ = _run_method_and_decode(objective={rxn: 1.0}, constraints=constraints, minimize=False, initial_state = initial_state)
     return rxn, min_val, max_val
+
 
 def ifva_parallel(model: Union['Model', 'MetabolicModel', 'RegulatoryModel'],
                   fraction: float = 1.0,
@@ -219,11 +285,15 @@ def ifva_parallel(model: Union['Model', 'MetabolicModel', 'RegulatoryModel'],
                   objective: Union[str, Dict[str, float]] = None,
                   constraints: Dict[str, Tuple[float, float]] = None,
                   initial_state: Dict[str, float] = None,
+                  model_path: str = None,
+                  trn_path: str = None,
                   method: str = 'srfba',
                   num_processes: int = None) -> pd.DataFrame:
 
     if not reactions:
         reactions = model.reactions.keys()
+    
+    num_reactions = len(reactions)
 
     if objective:
         if hasattr(objective, 'keys'):
@@ -237,27 +307,38 @@ def ifva_parallel(model: Union['Model', 'MetabolicModel', 'RegulatoryModel'],
         constraints = {}
 
     LP = INTEGRATED_ANALYSIS_METHODS[method]
-
+    print("building _lp...",end="")
     _lp = LP(model).build()
+    print("OK!")
     objective_value, _ = run_method_and_decode(method=_lp, objective=objective, constraints=constraints,
                                                initial_state=initial_state)
+    print("objective_value=",objective_value)
     constraints[obj] = (fraction * objective_value, ModelConstants.REACTION_UPPER_BOUND)
 
-    lp = LP(model).build()
-
-    result = defaultdict(list)
-    args_list = [(lp, rxn, constraints) for rxn in reactions]
+    args_list = [(rxn, constraints, initial_state) for rxn in reactions]
 
     if num_processes is None:
         num_processes = multiprocessing.cpu_count() - 2
 
-    with Pool(num_processes) as pool:
-        results = pool.map(process_reaction, args_list)
+    fva_result = pd.DataFrame(
+        {
+            "minimum": np.zeros(num_reactions, dtype=float),
+            "maximum": np.zeros(num_reactions, dtype=float),
+        },
+        index=reactions,
+    )
+    chunk_size = num_reactions // num_processes
+    print("chunk_size=",chunk_size)
+    # Create a ProcessPool instance
+    with ProcessPool(processes=num_processes, initializer=_init_worker, initargs=(model_path,trn_path,)) as pool:
+        print("with ProcessPool...")
+        # Use pool.map() instead of pool.imap_unordered() for ordered results
+        for rxn_id, value_min, value_max in pool.imap_unordered(process_reaction, args_list, chunksize=chunk_size):
+            # Update your DataFrame with the results
+            fva_result.at[rxn_id, "minimum"] = value_min
+            fva_result.at[rxn_id, "maximum"] = value_max
 
-    for rxn, min_val, max_val in results:
-        result[rxn].extend([min_val, max_val])
-
-    return pd.DataFrame.from_dict(data=result, orient='index', columns=['minimum', 'maximum'])
+    return fva_result
 
 def isingle_gene_deletion(model: Union['Model', 'MetabolicModel', 'RegulatoryModel'],
                           genes: Sequence[str] = None,

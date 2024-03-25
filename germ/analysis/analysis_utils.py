@@ -8,6 +8,10 @@ from mewpy.germ.algebra import And, Or
 from mewpy.solvers.solution import Status
 from mewpy.util.constants import ModelConstants
 
+import multiprocessing
+from types import TracebackType
+from typing import Any, Callable, Optional, Tuple, Type
+
 if TYPE_CHECKING:
     from mewpy.solvers import Solution
     from mewpy.germ.lp import LinearProblem
@@ -269,3 +273,48 @@ def system_state_update(model: Union['Model', 'MetabolicModel', 'RegulatoryModel
                                                    exchange=met.exchange)
 
     return next_biomass, next_metabolites
+
+
+
+__all__ = ("ProcessPool",)
+
+
+class ProcessPool:
+    """Define a process pool without special handling for Windows."""
+    def __init__(
+        self,
+        processes: Optional[int] = None,
+        initializer: Optional[Callable] = None,
+        initargs: Tuple = (),
+        maxtasksperchild: Optional[int] = None,
+    ) -> None:
+        """Initialize a process pool directly."""
+        self._pool = multiprocessing.Pool(
+            processes=processes,
+            initializer=initializer,
+            initargs=initargs,
+            maxtasksperchild=maxtasksperchild,
+        )
+
+    def __getattr__(self, name: str) -> Any:
+        """Defer attribute access to the pool instance."""
+        return getattr(self._pool, name)
+
+    def __enter__(self) -> "ProcessPool":
+        """Enable context management."""
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
+    ) -> Optional[bool]:
+        """Clean up resources when leaving a context."""
+        self.close()
+        return False  # Propagate exceptions
+
+    def close(self) -> None:
+        """Close the process pool."""
+        self._pool.close()
+        self._pool.join()
