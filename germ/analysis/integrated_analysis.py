@@ -296,6 +296,7 @@ def ifva_parallel(model: Union['Model', 'MetabolicModel', 'RegulatoryModel'],
         reactions = model.reactions.keys()
     
     num_reactions = len(reactions)
+    num_processes = min(num_processes,num_reactions)
 
     if objective:
         if hasattr(objective, 'keys'):
@@ -330,10 +331,12 @@ def ifva_parallel(model: Union['Model', 'MetabolicModel', 'RegulatoryModel'],
         index=reactions,
     )
     chunk_size = num_reactions // num_processes
+    
     print("chunk_size=",chunk_size)
+    print("num_processes=",num_processes)
     # Create a ProcessPool instance
-    with ProcessPool(processes=num_processes, initializer=_init_worker, initargs=(model_path,trn_path,)) as pool:
-        print("with ProcessPool...")
+    with Pool(processes=num_processes, initializer=_init_worker, initargs=(model_path,trn_path,)) as pool:
+        print("with Pool...")
         # Use pool.map() instead of pool.imap_unordered() for ordered results
         for rxn_id, value_min, value_max in pool.imap_unordered(process_reaction, args_list, chunksize=chunk_size):
             # Update your DataFrame with the results
@@ -526,11 +529,32 @@ def regulatory_single_gene_deletion(model: Union['Model', 'MetabolicModel', 'Reg
         
     return pd.DataFrame.from_dict(data=result, orient='index', columns=['growth', 'status'])
 
+def process_isingle_reaction(args):
+    #print("process_reaction")
+    reaction, constraints, initial_state = args
+    #print("initial_state = ",initial_state)
+    if initial_state is None:
+        initial_state = {}
+    
+    _ = constraints.pop(reaction, None)
+    constraints[reaction] = (0.0, 0.0)
+
+    # Add more print statements to inspect the contents of lp, rxn, constraints if needed
+    # For example:
+    # print("Contents of lp:", lp)
+    # print("Contents of rxn:", rxn)
+    # print("Contents of constraints:", constraints)
+    solution, status = _run_method_and_decode(constraints=constraints, minimize=True, initial_state = initial_state)
+    return reaction, solution, status
+
 def isingle_reaction_deletion(model: Union['Model', 'MetabolicModel', 'RegulatoryModel'],
                               reactions: Sequence[str] = None,
                               constraints: Dict[str, Tuple[float, float]] = None,
                               initial_state: Dict[str, float] = None,
-                              method: str = 'srfba') -> pd.DataFrame:
+                              model_path: str = None,
+                              trn_path: str = None,
+                              method: str = 'srfba',
+                              num_processes: int = None) -> pd.DataFrame:
     """
     Integrated single reaction deletion analysis of an integrated Metabolic-Regulatory model.
     Integrated single reaction deletion analysis is a method to determine the effect of deleting each reaction
@@ -551,24 +575,20 @@ def isingle_reaction_deletion(model: Union['Model', 'MetabolicModel', 'Regulator
 
     if not reactions:
         reactions = model.reactions.keys()
+    
+    num_reactions = len(reactions)
+    num_processes = min(num_processes,num_reactions)
+    chunk_size = num_reactions // num_processes
 
-    LP = INTEGRATED_ANALYSIS_METHODS[method]
-    lp = LP(model).build()
+    #LP = INTEGRATED_ANALYSIS_METHODS[method]
+    #lp = LP(model).build()
+    args_list = [(rxn, constraints, initial_state) for rxn in reactions]
 
     result = {}
-    for reaction in reactions:
+    with Pool(processes=num_processes, initializer=_init_worker, initargs=(model_path,trn_path,)) as pool:
 
-        reaction_constraint = constraints.pop(reaction, None)
-        constraints[reaction] = (0.0, 0.0)
-
-        solution, status = run_method_and_decode(method=lp, constraints=constraints, initial_state=initial_state)
-
-        result[reaction] = [solution, status]
-
-        if reaction_constraint is not None:
-            constraints[reaction] = reaction_constraint
-        else:
-            constraints.pop(reaction)
+        for rxn, solution, status in pool.imap_unordered(process_isingle_reaction, args_list, chunksize=chunk_size):
+            result[rxn] = [solution, status]
 
     return pd.DataFrame.from_dict(data=result, orient='index', columns=['growth', 'status'])
 

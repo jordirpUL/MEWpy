@@ -325,7 +325,7 @@ class CplexSolver(Solver):
         self.add_constraints(constr_ids, lhs, senses, rhs)
 
     def solve(self, linear=None, quadratic=None, minimize=None, model=None, constraints=None, get_values=True,
-              shadow_prices=False, reduced_costs=False, pool_size=0, pool_gap=None):
+              shadow_prices=True, reduced_costs=False, pool_size=0, pool_gap=None):
         """ Solve the optimization problem.
 
         Arguments:
@@ -350,6 +350,7 @@ class CplexSolver(Solver):
 
         problem = self.problem
 
+        changed_lb, changed_ub = None, None
         if constraints:
             changed_lb, changed_ub = self.temporary_bounds(constraints)
 
@@ -381,7 +382,7 @@ class CplexSolver(Solver):
                 if reduced_costs:
                     r_costs = dict(zip(self.var_ids, problem.solution.get_reduced_costs(self.var_ids)))
 
-                solution = Solution(status, message, fobj, values, s_prices, r_costs)
+                solution = Solution(status, message, fobj, values, s_prices, r_costs,changed_lb, changed_ub)
             else:
                 solution = Solution(status, message)
 
@@ -420,7 +421,7 @@ class CplexSolver(Solver):
 
         if constraints:
             self.reset_bounds(changed_lb, changed_ub)
-
+        
         return solution
 
     def temporary_bounds(self, constraints):
