@@ -400,7 +400,7 @@ class And(Boolean):
             return float(operator([left, right]))
 
         #return solution_decode(float(left) & float(right))
-        return float(min(left, right))
+        return float(mean([left, right]))
 
     def __and__(self, *args):
         self.variables.extend(args)
@@ -434,7 +434,7 @@ class Or(Boolean):
         #print("Returning MAX inside OR:",solution_decode(float(left) | float(right)))
         #return solution_decode(float(left) | float(right))
         #print("Returning MAX inside OR:",max(left, right))
-        return float(max(left, right))
+        return float(mean([left, right]))
 
     def __or__(self, *args):
         self.variables.extend(args)
