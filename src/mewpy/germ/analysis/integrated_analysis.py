@@ -280,7 +280,6 @@ def process_reaction(args):
     max_val, _ = _run_method_and_decode(objective={rxn: 1.0}, constraints=constraints, minimize=False, initial_state = initial_state)
     return rxn, min_val, max_val
 
-
 def ifva_parallel(model: Union['Model', 'MetabolicModel', 'RegulatoryModel'],
                   fraction: float = 1.0,
                   reactions: Sequence[str] = None,
