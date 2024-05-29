@@ -133,6 +133,7 @@ class BooleanRegulatoryCSV(Engine):
             # -----------------------------------------------------------------------------
 
             symbolic, warning = build_symbolic(self.dto.data_frame.loc[target, 'rules'])
+            
 
             if warning:
                 self.warnings.append(partial(expression_warning, warning))

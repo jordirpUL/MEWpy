@@ -51,13 +51,15 @@ class Solution(object):
     """
 
     def __init__(self, status=Status.UNKNOWN, message=None, fobj=None, values=None,
-                 shadow_prices=None, reduced_costs=None):
+                 shadow_prices=None, reduced_costs=None, changed_lb =None, changed_ub=None):
         self.status = status
         self.message = message
         self.fobj = fobj
         self.values = values
         self.shadow_prices = shadow_prices
         self.reduced_costs = reduced_costs
+        self.changed_lb = changed_lb
+        self.changed_ub = changed_ub
 
     def __str__(self):
         return f"Objective: {self.fobj}\nStatus: {self.status.value}\n"

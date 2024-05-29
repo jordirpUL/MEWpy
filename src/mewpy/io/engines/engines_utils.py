@@ -18,7 +18,6 @@ def build_symbolic(expression) -> Tuple[Symbolic, str]:
         return parse_expression(expression), ''
 
     except SyntaxError:
-
         return NoneAtom(), f'{expression} cannot be parsed. Assigning empty expression instead'
 
 

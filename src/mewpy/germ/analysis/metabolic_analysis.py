@@ -143,7 +143,8 @@ def single_gene_deletion(model: Union['Model', 'MetabolicModel', 'RegulatoryMode
 
     fba = FBA(model).build()
     wt_objective_value, wt_status = run_method_and_decode(method=fba, constraints=constraints)
-
+    print(f"WT {wt_objective_value=} {wt_status=}")
+    
     state = {gene.id: max(gene.coefficients) for gene in model.yield_genes()}
 
     result = {}
@@ -175,7 +176,6 @@ def single_gene_deletion(model: Union['Model', 'MetabolicModel', 'RegulatoryMode
         state[gene.id] = gene_coefficient
 
     return pd.DataFrame.from_dict(data=result, orient='index', columns=['growth', 'status'])
-
 
 def single_reaction_deletion(model: Union['Model', 'MetabolicModel', 'RegulatoryModel'],
                              reactions: Sequence[str] = None,

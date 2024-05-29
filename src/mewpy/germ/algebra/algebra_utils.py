@@ -1,7 +1,7 @@
 from typing import Union, Dict, Any
 
 
-def solution_decode(solution: Union[int, bool], decoder: Dict[Any, int] = None) -> int:
+def solution_decode(solution: Union[float, bool], decoder: Dict[Any, int] = None) -> float:
     """
     Decode a solution from expression or symbolic evaluation.
     Solution decoding is sometimes not straightforward due to python bitwise evaluations
@@ -11,6 +11,10 @@ def solution_decode(solution: Union[int, bool], decoder: Dict[Any, int] = None) 
     :return: it returns a solution decoded into the integer 0 or 1
     """
 
+    if isinstance(solution, float):
+        #print("returning float:",solution)
+        return float(solution)
+
     if not decoder:
         decoder = {True: 1,
                    False: 0,
@@ -19,7 +23,7 @@ def solution_decode(solution: Union[int, bool], decoder: Dict[Any, int] = None) 
                    -1: 1,
                    -2: 0
                    }
-
+    #print("returning default:",solution)
     return decoder.get(solution, solution)
 
 

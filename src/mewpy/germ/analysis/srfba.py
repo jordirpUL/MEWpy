@@ -3,7 +3,7 @@ from typing import Union, Dict, TYPE_CHECKING
 
 from mewpy.util.constants import ModelConstants
 
-from mewpy.germ.analysis import FBA
+from mewpy.germ.analysis import pFBA
 from mewpy.germ.lp import ConstraintContainer, VariableContainer, concat_constraints, integer_coefficients
 from mewpy.germ.solution import ModelSolution
 from mewpy.germ.models import Model, MetabolicModel, RegulatoryModel
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from mewpy.germ.variables import Reaction, Interaction
 
 
-class SRFBA(FBA):
+class SRFBA(pFBA):
 
     def __init__(self,
                  model: Union[Model, MetabolicModel, RegulatoryModel],
@@ -99,7 +99,7 @@ class SRFBA(FBA):
                                        sub_variables=[boolean_variable],
                                        lbs=[0.0],
                                        ubs=[1.0],
-                                       variables_type=[VarType.INTEGER])]
+                                       variables_type=[VarType.CONTINUOUS])]
 
         lb, ub = reaction.bounds
 
@@ -141,9 +141,9 @@ class SRFBA(FBA):
         :param interaction: the interaction
         :return: interaction variables and constraints
         """
+
         symbolic = None
         for coefficient, expression in interaction.regulatory_events.items():
-
             if coefficient > 0.0:
                 symbolic = expression.symbolic
 
@@ -153,117 +153,32 @@ class SRFBA(FBA):
         lb = float(min(interaction.target.coefficients))
         ub = float(max(interaction.target.coefficients))
 
-        if (lb, ub) in integer_coefficients:
-            v_type = VarType.INTEGER
-        else:
-            v_type = VarType.CONTINUOUS
-
+        v_type = VarType.CONTINUOUS
         variables = [VariableContainer(name=interaction.target.id,
-                                       sub_variables=[interaction.target.id],
-                                       lbs=[lb],
-                                       ubs=[ub],
-                                       variables_type=[v_type])]
+                                    sub_variables=[interaction.target.id],
+                                    lbs=[lb],
+                                    ubs=[ub],
+                                    variables_type=[v_type])]
         constraints = []
 
         expression_variables, expression_cnt = self.linearize_expression(boolean_variable=interaction.target.id,
-                                                                         symbolic=symbolic)
+                                                                        symbolic=symbolic)
 
         variables.extend(expression_variables)
         constraints.extend(expression_cnt)
 
         constraints = [concat_constraints(constraints=constraints, name=interaction.target.id)]
+
         return variables, constraints
 
     @staticmethod
     def and_constraint(symbolic):
         """
-        Following Boolean algebra, an And (a = b and c) can be translated as: a = b*c
-        Alternatively, an And can be written as lb < b + c - a < ub
+        Translate an And (a = b and c) into a continuous constraint: a = min(b, c)
+        Alternatively, an And can be written as lb <= b + c - a <= ub
 
-        So, for the midterm expression a = b and c
-        We have therefore the equation: -1 <= 2*b + 2*c – 4*a <= 3
-        :param symbolic: the symbolic expression
-        :return: a constraint
-        """
-        name = symbolic.key()
-        names = [f'{name}_{i}' for i, _ in enumerate(symbolic.variables[:-1])]
-
-        and_op = names[0]
-        op_l = symbolic.variables[0]
-        op_r = symbolic.variables[1]
-
-        _coefs = []
-        _lbs = []
-        _ubs = []
-
-        if op_l.is_one or op_l.is_true:
-
-            _coef = {and_op: -4.0, op_r.key(): 2.0}
-            _state = (-3.0, 1.0)
-
-        elif op_r.is_one or op_r.is_true:
-
-            _coef = {and_op: -4.0, op_l.key(): 2.0}
-            _state = (-3.0, 1.0)
-
-        elif op_l.is_zero or op_l.is_false:
-
-            _coef = {and_op: -4.0, op_r.key(): 2.0}
-            _state = (-1.0, 3.0)
-
-        elif op_r.is_zero or op_r.is_false:
-
-            _coef = {and_op: -4.0, op_l.key(): 2.0}
-            _state = (-1.0, 3.0)
-
-        else:
-
-            _coef = {and_op: -4.0, op_l.key(): 2.0, op_r.key(): 2.0}
-            _state = (-1.0, 3.0)
-
-        _coefs.append(_coef)
-        _lbs.append(_state[0])
-        _ubs.append(_state[1])
-
-        children = []
-
-        if len(symbolic.variables) > 2:
-            children = symbolic.variables[2:]
-
-        # building a nested And subexpression
-        for i, op_r in enumerate(children):
-
-            op_l = names[i]
-            and_op = names[i + 1]
-
-            if op_r.is_one or op_r.is_true:
-
-                _coef = {and_op: -4.0, op_l: 2.0}
-                _state = (-3.0, 1.0)
-
-            elif op_r.is_zero or op_r.is_false:
-
-                _coef = {and_op: -4.0, op_l: 2.0}
-                _state = (-1.0, 3.0)
-
-            else:
-                _coef = {and_op: -4.0, op_l: 2.0, op_r.key(): 2.0}
-                _state = (-1.0, 3.0)
-
-            _coefs.append(_coef)
-            _lbs.append(_state[0])
-            _ubs.append(_state[1])
-
-        return ConstraintContainer(name=None, coefs=_coefs, lbs=_lbs, ubs=_ubs)
-
-    @staticmethod
-    def or_constraint(symbolic):
-        """
-        Following Boolean algebra, an Or (a = b or c) can be translated as: a = b + c - b*c
-        Alternatively, an Or can be written as lb < b + c - a < ub
-
-        So, for the midterm expression a = b or c
-        We have therefore the equation: -2 <= 2*b + 2*c – 4*a <= 1
+        So, for the continuous expression a = b and c:
+        We have the equation: 0 <= b + c - a <= 1
         :param symbolic: the symbolic expression
         :return: a constraint
         """
@@ -278,30 +193,10 @@ class SRFBA(FBA):
         _lbs = []
         _ubs = []
 
-        if op_l.is_one or op_l.is_true:
-
-            _coef = {or_op: -4.0, op_r.key(): 2.0}
-            _state = (-4.0, -1.0)
-
-        elif op_r.is_one or op_r.is_true:
-
-            _coef = {or_op: -4.0, op_l.key(): 2.0}
-            _state = (-4.0, -1.0)
-
-        elif op_l.is_zero or op_l.is_false:
-
-            _coef = {or_op: -4.0, op_r.key(): 2.0}
-            _state = (-2.0, 0.0)
-
-        elif op_r.is_zero or op_r.is_false:
-
-            _coef = {or_op: -4.0, op_l.key(): 2.0}
-            _state = (-2.0, 0.0)
-
-        else:
-
-            _coef = {or_op: -4.0, op_l.key(): 2.0, op_r.key(): 2.0}
-            _state = (-2.0, 1.0)
+        # Create constraints
+        # a = min(b, c)
+        _coef = {or_op: -4.0, op_l.key(): 2.0, op_r.key(): 2.0}
+        _state = (-1.0, 3.0)
 
         _coefs.append(_coef)
         _lbs.append(_state[0])
@@ -312,26 +207,12 @@ class SRFBA(FBA):
         if len(symbolic.variables) > 2:
             children = symbolic.variables[2:]
 
-        # building a nested Or subexpression
         for i, op_r in enumerate(children):
-
             op_l = names[i]
             or_op = names[i + 1]
 
-            if op_r.is_one or op_r.is_true:
-
-                _coef = {or_op: -4.0, op_l: 2.0}
-                _state = (-4.0, -1.0)
-
-            elif op_r.is_zero or op_r.is_false:
-
-                _coef = {or_op: -4.0, op_l: 2.0}
-                _state = (-2.0, 1.0)
-
-            else:
-
-                _coef = {or_op: -4.0, op_l: 2.0, op_r.key(): 2.0}
-                _state = (-2.0, 1.0)
+            _coef = {or_op: -4.0, op_l: 2.0, op_r.key(): 2.0}
+            _state = (-1.0, 3.0)
 
             _coefs.append(_coef)
             _lbs.append(_state[0])
@@ -340,27 +221,71 @@ class SRFBA(FBA):
         return ConstraintContainer(name=None, coefs=_coefs, lbs=_lbs, ubs=_ubs)
 
     @staticmethod
+    def or_constraint(symbolic):
+        """
+        Translate an Or (a = b or c) into a continuous constraint: a = max(b, c)
+        Alternatively, an Or can be written as: a >= b, a >= c, a <= b + c
+
+        So, for the continuous expression a = b or c:
+        We have the equation: a = max(b, c)
+        :param symbolic: the symbolic expression
+        :return: a ConstraintContainer
+        """
+        #print("symbolic",symbolic)
+        name = symbolic.key()
+        #print("name",name)
+        names = [f'{name}_{i}' for i, _ in enumerate(symbolic.variables[:-1])]
+
+        or_op = names[0]
+        op_l = symbolic.variables[0]
+        op_r = symbolic.variables[1]
+
+        _coefs = []
+        _lbs = []
+        _ubs = []
+        #print("op_l.is_numeric",op_l.is_numeric)
+        #print("op_r.is_numeric",op_r.is_numeric)
+        # Create constraints
+        # a = max(b, c)
+        _coef = {or_op: -4.0, op_l.key(): 2.0, op_r.key(): 2.0}
+        _state = (-2.0, 1.0)
+        #print("_coef",_coef)
+
+        _coefs.append(_coef)
+        _lbs.append(_state[0])
+        _ubs.append(_state[1])
+
+        children = []
+
+        if len(symbolic.variables) > 2:
+            children = symbolic.variables[2:]
+
+        for i, op_r in enumerate(children):
+            op_l = names[i]
+            or_op = names[i + 1]
+
+            _coef = {or_op: -4.0, op_l: 2.0, op_r.key(): 2.0}
+            _state = (-2.0, 1.0)
+
+            _coefs.append(_coef)
+            _lbs.append(_state[0])
+            _ubs.append(_state[1])
+
+        return ConstraintContainer(name=None, coefs=_coefs, lbs=_lbs, ubs=_ubs)
+    
+    @staticmethod
     def not_constraint(symbolic):
         """
-        Following Boolean algebra, a Not (a = not b) can be translated as: a = 1 - b
-        Alternatively, a Not can be written as a + b = 1
-
-        So, for the midterm expression a = not b
-        We have therefore the equation: 1 < a + b < 1
+        Translate a Not (a = not b) into a continuous constraint: a + b = 1
         :param symbolic: the symbolic expression
         :return: a constraint
         """
         op_l = symbolic.variables[0]
 
-        # Not right operators
         if op_l.is_numeric:
-
             _coef = {symbolic.key(): 1.0}
-            _state = (float(op_l.value), float(op_l.value))
-
+            _state = (1.0 - float(op_l.value), 1.0 - float(op_l.value))
         else:
-
-            # add Not row and set mip bounds to 1;1
             _coef = {symbolic.key(): 1.0, op_l.key(): 1.0}
             _state = (1.0, 1.0)
 
@@ -591,7 +516,7 @@ class SRFBA(FBA):
             names.append(f'{name}_{i}')
             lbs.append(0.0)
             ubs.append(1.0)
-            var_types.append(VarType.INTEGER)
+            var_types.append(VarType.CONTINUOUS)
 
         return VariableContainer(name=name, sub_variables=names, lbs=lbs, ubs=ubs, variables_type=var_types)
 
@@ -625,7 +550,7 @@ class SRFBA(FBA):
                                  sub_variables=[sub_variable_name],
                                  lbs=[0.0],
                                  ubs=[1.0],
-                                 variables_type=[VarType.INTEGER])
+                                 variables_type=[VarType.CONTINUOUS])
 
     def greater_variable(self, symbolic):
         """
@@ -663,11 +588,11 @@ class SRFBA(FBA):
         lb = float(lb)
         ub = float(ub)
 
-        if (lb, ub) in integer_coefficients:
-            v_type = VarType.INTEGER
-        else:
-            v_type = VarType.CONTINUOUS
-
+        # if (lb, ub) in integer_coefficients:
+        #     v_type = VarType.INTEGER
+        # else:
+        #     v_type = VarType.CONTINUOUS
+        v_type = VarType.CONTINUOUS
         return VariableContainer(name=name, sub_variables=[name], lbs=[lb], ubs=[ub], variables_type=[v_type])
 
     def get_lp_variable(self, symbolic):
@@ -764,6 +689,7 @@ class SRFBA(FBA):
         constraints = []
         last_variable = None
         for atom in symbolic:
+            #print("ATOM:",atom,"END ATOM")
 
             # An operator expression will be decomposed into multiple operator expressions, namely into a nested
             # expression. For instance, an A & B & C & D will become And(D, And(C, And(A, B))). Each nested operator
@@ -802,6 +728,11 @@ class SRFBA(FBA):
         else:
             last_variable_name = last_variable_name
 
+        # Get the continuous value of the last symbolic expression
+        #if last_variable.is_numeric:
+            #print("IS_NUMERIC",last_variable.value)
+        #last_symbolic_value = last_variable.value()
+
         # add gene row which means that the gene variable in the mip matrix is associated with the last midterm
         # expression, namely the whole expression
         # set mip bounds to 0;0
@@ -810,7 +741,7 @@ class SRFBA(FBA):
                                              lbs=[0.0],
                                              ubs=[0.0])
         constraints.append(expression_cnt)
-
+        #print("-----------------------------")
         return variables, constraints
 
     def linearize_expression(self, boolean_variable, symbolic):
@@ -863,12 +794,19 @@ class SRFBA(FBA):
         variables = []
         constraints = []
         for interaction in self.model.yield_interactions():
+            #print("Processing interaction:",interaction)
             interaction_variables, interaction_constraints = self.interaction_constraint(interaction)
+            #print("interaction_variables",[it.items() for it in interaction_variables])
+            #print("interaction_constraints",[it.items() for it in interaction_constraints])
             variables.extend(interaction_variables)
             constraints.extend(interaction_constraints)
 
         self.add_variables(*variables)
         self.add_constraints(*constraints)
+
+        #print("-------------------------------------------------")
+
+        
 
     def _build_gprs(self):
         """
@@ -930,6 +868,8 @@ class SRFBA(FBA):
 
         if not solver_kwargs:
             solver_kwargs = {}
+           
+        solver_kwargs['get_values'] = True
 
         if 'constraints' in solver_kwargs:
             constraints = solver_kwargs['constraints'].copy()
@@ -939,6 +879,6 @@ class SRFBA(FBA):
 
         constraints = {**constraints, **initial_state}
         solver_kwargs['constraints'] = constraints
-
-        solution = self.solver.solve(**solver_kwargs)
+        solution = self.solver.solve(**{**solver_kwargs,
+                                        'get_values': True})
         return solution

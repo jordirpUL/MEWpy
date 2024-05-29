@@ -1,4 +1,5 @@
 import abc
+from statistics import mean
 from typing import List, Any, Dict, Callable, Union, Tuple
 
 from .algebra_utils import solution_decode, _walk
@@ -387,7 +388,7 @@ class And(Boolean):
         self.is_and = True
 
     @staticmethod
-    def _evaluate(left=0, right=0, operators=None, **kwargs):
+    def _evaluate(left=0.0, right=0.0, operators=None, **kwargs):
 
         if not operators:
             operators = {}
@@ -395,9 +396,11 @@ class And(Boolean):
         operator = operators.get(And, None)
 
         if operator is not None:
-            return operator(left, right)
+            #return max(0.01,float(operator([left, right])))
+            return float(operator([left, right]))
 
-        return solution_decode(int(left) & int(right))
+        #return solution_decode(float(left) & float(right))
+        return float(mean([left, right]))
 
     def __and__(self, *args):
         self.variables.extend(args)
@@ -417,7 +420,7 @@ class Or(Boolean):
         self.is_or = True
 
     @staticmethod
-    def _evaluate(left=0, right=0, operators=None, **kwargs):
+    def _evaluate(left=0.0, right=0.0, operators=None, **kwargs):
 
         if not operators:
             operators = {}
@@ -425,9 +428,13 @@ class Or(Boolean):
         operator = operators.get(Or, None)
 
         if operator is not None:
-            return operator(left, right)
+            #return max(0.01,float(operator([left, right])))
+            return float(operator([left, right]))
 
-        return solution_decode(int(left) | int(right))
+        #print("Returning MAX inside OR:",solution_decode(float(left) | float(right)))
+        #return solution_decode(float(left) | float(right))
+        #print("Returning MAX inside OR:",max(left, right))
+        return float(mean([left, right]))
 
     def __or__(self, *args):
         self.variables.extend(args)
@@ -447,7 +454,7 @@ class Not(Boolean):
         self.is_not = True
 
     @staticmethod
-    def _evaluate(left=0, operators=None, **kwargs):
+    def _evaluate(left=0.0, operators=None, **kwargs):
 
         if not operators:
             operators = {}
@@ -457,7 +464,7 @@ class Not(Boolean):
         if operator is not None:
             return operator(left)
 
-        return solution_decode(~ int(left))
+        return 1.0 - left
 
 
 class Relational(Boolean):
@@ -810,7 +817,7 @@ class Symbol(AtomNumber, Boolean):
 
         if not isinstance(value, (int, float, bool, AtomNumber)):
             raise ValueError(f'cannot evaluate {self.name} for {value}')
-
+        #print(f"Entering class Symbol for {self.name}")
         return solution_decode(value)
 
 

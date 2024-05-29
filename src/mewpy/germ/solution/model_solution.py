@@ -43,6 +43,8 @@ class ModelSolution:
                  objective_direction: str = 'maximize',
                  reduced_costs: Dict[str, float] = None,
                  shadow_prices: Dict[str, float] = None,
+                 changed_lb: Dict[str, float] = None,
+                 changed_ub: Dict[str, float] = None,
                  model: Union['Model', 'MetabolicModel', 'RegulatoryModel'] = None,
                  simulator: 'LinearProblem' = None,
                  tol: float = ModelConstants.TOLERANCE):
@@ -99,6 +101,12 @@ class ModelSolution:
 
         if not shadow_prices:
             shadow_prices = {}
+        
+        if not changed_lb:
+            changed_lb = {}
+        
+        if not changed_ub:
+            changed_ub = {}
 
         self._method = method
         self._x = x
@@ -107,6 +115,8 @@ class ModelSolution:
         self._objective_direction = objective_direction
         self._reduced_costs = reduced_costs
         self._shadow_prices = shadow_prices
+        self._changed_lb = changed_lb
+        self._changed_ub = changed_ub
         self._model = model
         self._simulator = simulator
         self.tol = tol
@@ -327,7 +337,7 @@ class ModelSolution:
         """
         results = {}
 
-        for variable in self.model.yield_exchanges():
+        for variable in self.model.yield_reactions():
 
             if variable.is_reaction():
                 _id, v_type, x = self._get_variable_info(variable)
@@ -707,4 +717,6 @@ class ModelSolution:
                    status=solution.status.value.lower(),
                    reduced_costs=solution.reduced_costs,
                    shadow_prices=solution.shadow_prices,
+                   changed_lb=solution.changed_lb,
+                   changed_ub = solution.changed_ub,
                    **kwargs)

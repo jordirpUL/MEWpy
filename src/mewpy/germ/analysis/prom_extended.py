@@ -32,7 +32,7 @@ def _run_and_decode_solver(lp,
         return
 
 
-class PROM(FBA):
+class PROMEXTENDED(FBA):
 
     def __init__(self,
                  model: Union['Model', 'MetabolicModel', 'RegulatoryModel'],
@@ -107,7 +107,7 @@ class PROM(FBA):
         return rates
 
     def _optimize_ko(self,
-                     probabilities: Dict[Tuple[str, str], float],
+                     probabilities: Dict[str, float],
                      regulator: Union['Gene', 'Regulator'],
                      reference: Dict[str, float],
                      max_rates: Dict[str, float],
@@ -123,19 +123,21 @@ class PROM(FBA):
         if regulator.is_gene():
 
             for reaction in regulator.reactions.keys():
-                prom_constraints[reaction] = (-ModelConstants.TOLERANCE, ModelConstants.TOLERANCE)
+                prom_constraints[reaction] = (0.0, 0.0)
 
         # finds the target genes of the deleted regulator.
         # finds the reactions associated with these target genes.
         # The reactions' bounds might be changed next, but for now the flag is set to False
         target_reactions = {}
-        for target in regulator.yield_targets():
+        
+        if regulator.is_regulator():
+            for target in regulator.yield_targets():
 
-            if target.is_gene():
-                # after the regulator ko iteration, this is reset
-                state[target.id] = 0
+                if target.is_gene():
+                    # after the regulator ko iteration, this is reset
+                    state[target.id] = 0
 
-                target_reactions.update({reaction.id: reaction for reaction in target.yield_reactions()})
+                    target_reactions.update({reaction.id: reaction for reaction in target.yield_reactions()})
 
         # GPR evaluation of each reaction previously found, but using the changed gene_state.
         # If the GPR is evaluated to zero, the reaction bounds will be changed in the future.
@@ -152,68 +154,69 @@ class PROM(FBA):
             inactive_reactions[reaction.id] = reaction
 
         # for each target regulated by the regulator
-        for target in regulator.yield_targets():
+        if regulator.is_regulator():
+            for target in regulator.yield_targets():
 
-            if not target.is_gene():
-                continue
-
-            target: Union['Target', 'Gene']
-
-            # composed key for interactions_probabilities
-            target_regulator = (target.id, regulator.id)
-
-            if target_regulator not in probabilities:
-                continue
-
-            interaction_probability = probabilities[target_regulator]
-
-            # for each reaction associated with this single target
-            for reaction in target.yield_reactions():
-                print(reaction.id)
-                # if the gpr has been evaluated previously to zero,
-                # it means that the metabolic genes regulated by this regulator can affect the state of the
-                # reaction. Thus, the reaction bounds can be changed using PROM probability.
-                # Nevertheless, it is only useful to do that if the probability is inferior to 1, otherwise
-                # nothing is changed
-                if reaction.id not in inactive_reactions:
+                if not target.is_gene():
                     continue
 
-                if interaction_probability >= 1:
-                    continue
-                print("--------------------------------------------")
-                # reaction old bounds
-                rxn_lb, rxn_ub = tuple(prom_constraints[reaction.id])
-                print("\tBoundaries (original): (",rxn_lb,rxn_ub,")")
+                target: Union['Target', 'Gene']
 
-                # probability flux is the upper or lower bound that this reaction can take
-                # when the regulator is KO. This is calculated as follows:
-                # interaction probability times the reaction maximum limit (determined by fva)
-                probability_flux = max_rates[reaction.id] * interaction_probability
+                # composed key for interactions_probabilities
+                target_regulator = target.id
 
-                # wild-type flux value for this reaction
-                wt_flux = reference[reaction.id]
-
-                # update flux bounds according to probability flux
-                if wt_flux < 0:
-
-                    rxn_lb = max((reaction.lower_bound, probability_flux, rxn_lb))
-                    rxn_lb = min((rxn_lb, -ModelConstants.TOLERANCE))
-
-                elif wt_flux > 0:
-
-                    rxn_ub = min((reaction.upper_bound, probability_flux, rxn_ub))
-                    rxn_ub = max((rxn_ub, ModelConstants.TOLERANCE))
-
-                else:
-
-                    # if it is zero, the reaction is not changed, so that reactions are not activated
-                    # by PROM. Only reaction ko is forced by PROM.
-
+                if target_regulator not in probabilities:
                     continue
 
-                prom_constraints[reaction.id] = (rxn_lb, rxn_ub)
-                print("\tBoundaries (final): (",rxn_lb,rxn_ub,")")
-                print("--------------------------------------------")
+                interaction_probability = probabilities[target_regulator]
+
+                # for each reaction associated with this single target
+                for reaction in target.yield_reactions():
+                    print(reaction.id)
+                    # if the gpr has been evaluated previously to zero,
+                    # it means that the metabolic genes regulated by this regulator can affect the state of the
+                    # reaction. Thus, the reaction bounds can be changed using PROM probability.
+                    # Nevertheless, it is only useful to do that if the probability is inferior to 1, otherwise
+                    # nothing is changed
+                    if reaction.id not in inactive_reactions:
+                        continue
+
+                    if interaction_probability >= 1:
+                        continue
+                    print("--------------------------------------------")
+                    # reaction old bounds
+                    rxn_lb, rxn_ub = tuple(prom_constraints[reaction.id])
+                    print("\tBoundaries (original): (",rxn_lb,rxn_ub,")")
+
+                    # probability flux is the upper or lower bound that this reaction can take
+                    # when the regulator is KO. This is calculated as follows:
+                    # interaction probability times the reaction maximum limit (determined by fva)
+                    probability_flux = max_rates[reaction.id] * interaction_probability
+
+                    # wild-type flux value for this reaction
+                    wt_flux = reference[reaction.id]
+
+                    # update flux bounds according to probability flux
+                    if wt_flux < 0:
+
+                        rxn_lb = max((reaction.lower_bound, probability_flux, rxn_lb))
+                        rxn_lb = min((rxn_lb, -ModelConstants.TOLERANCE))
+
+                    elif wt_flux > 0:
+
+                        rxn_ub = min((reaction.upper_bound, probability_flux, rxn_ub))
+                        rxn_ub = max((rxn_ub, ModelConstants.TOLERANCE))
+
+                    else:
+
+                        # if it is zero, the reaction is not changed, so that reactions are not activated
+                        # by PROM. Only reaction ko is forced by PROM.
+
+                        continue
+
+                    prom_constraints[reaction.id] = (rxn_lb, rxn_ub)
+                    print("\tBoundaries (final): (",rxn_lb,rxn_ub,")")
+                    print("--------------------------------------------")
 
         solution = self.solver.solve(**{**solver_kwargs,
                                         'get_values': True,
@@ -227,7 +230,7 @@ class PROM(FBA):
                                          minimize=minimize)
 
     def _optimize(self,
-                  initial_state: Dict[Tuple[str, str], float] = None,
+                  initial_state: Dict[str, float] = None,
                   regulators: Sequence[Union['Gene', 'Regulator']] = None,
                   to_solver: bool = False,
                   solver_kwargs: Dict[str, Any] = None) -> Union[Dict[str, Solution], Dict[str, ModelSolution]]:
@@ -263,7 +266,7 @@ class PROM(FBA):
         return kos
 
     def optimize(self,
-                 initial_state: Dict[Tuple[str, str], float] = None,
+                 initial_state: Dict[str, float] = None,
                  regulators: Union[str, Sequence['str']] = None,
                  to_solver: bool = False,
                  solver_kwargs: Dict[str, Any] = None) -> Union[KOSolution, Dict[str, Solution]]:

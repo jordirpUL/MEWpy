@@ -1,21 +1,32 @@
 from collections import defaultdict
+from multiprocessing import Pool
 from typing import Union, TYPE_CHECKING, Dict, Tuple, Optional, Sequence
 
 import pandas as pd
 
+from copy import deepcopy
+import os
+import multiprocessing
+from cobra.util import ProcessPool
+import numpy as np
+
 from mewpy.util.constants import ModelConstants
+from mewpy.germ.analysis.analysis_utils import decode_solver_solution
 from .analysis_utils import run_method_and_decode
+from .metabolic_analysis import fva
 from .coregflux import CoRegFlux
 from .prom import PROM
 from .rfba import RFBA
 from .srfba import SRFBA
+from .fba import FBA
+from mewpy.germ.analysis import regulatory_truth_table, get_real_initial_state
 
 if TYPE_CHECKING:
     from mewpy.germ.models import Model, MetabolicModel, RegulatoryModel
 
 INTEGRATED_ANALYSIS_METHODS = {'rfba': RFBA,
                                'srfba': SRFBA}
-
+    
 
 def slim_rfba(model: Union['Model', 'MetabolicModel', 'RegulatoryModel'],
               initial_state: Dict[str, float] = None,
@@ -186,19 +197,153 @@ def ifva(model: Union['Model', 'MetabolicModel', 'RegulatoryModel'],
     objective_value, _ = run_method_and_decode(method=_lp, objective=objective, constraints=constraints,
                                                initial_state=initial_state)
     constraints[obj] = (fraction * objective_value, ModelConstants.REACTION_UPPER_BOUND)
-
+    print("FVA objective value = ",objective_value)
     lp = LP(model).build()
 
     result = defaultdict(list)
     for rxn in reactions:
-        min_val, _ = run_method_and_decode(method=lp, objective={rxn: 1.0}, constraints=constraints, minimize=True)
+        min_val, _ = run_method_and_decode(method=lp, objective={rxn: 1.0}, initial_state=initial_state, constraints=constraints, minimize=True)
         result[rxn].append(min_val)
 
-        max_val, _ = run_method_and_decode(method=lp, objective={rxn: 1.0}, constraints=constraints, minimize=False)
+        max_val, _ = run_method_and_decode(method=lp, objective={rxn: 1.0}, initial_state=initial_state, constraints=constraints, minimize=False)
         result[rxn].append(max_val)
 
     return pd.DataFrame.from_dict(data=result, orient='index', columns=['minimum', 'maximum'])
 
+def _init_worker(model_path, trn_path, method='srfba'):
+    """Initialize based on a model identifier instead of the model object itself."""
+    from mewpy.io import Reader, Engines, read_model
+
+    global _method
+    print("_init_worker")
+    print("Reading model...")
+    sbml_fname = model_path #f"..\\results\\SIRT1\\diet_models\\Recon3D_Western_diet.xml"
+    trn_fname = trn_path #"..\\data\\pypath\\grouped_sirt1_trn_manually_curated.csv"
+    core_gem_reader = Reader(Engines.MetabolicSBML, sbml_fname)
+    core_trn_reader = Reader(Engines.BooleanRegulatoryCSV,
+                                 trn_fname, sep=',', id_col=0, rule_col=1, header=0)
+    model = read_model(core_gem_reader, core_trn_reader)
+    print("setting sinks to 0")
+    for rxn in model.reactions.keys():
+        if "sink" in rxn:
+            model.get(rxn).bounds = (0,0)
+    model.objective = {"biomass_reaction":1.0}
+    print("Building LP...")
+    # Assuming you can load the model using a path or identifier:
+    LP = INTEGRATED_ANALYSIS_METHODS[method]
+    _method = LP(model).build()
+    print("LP build")
+
+
+def _run_method_and_decode(objective: Union[str, Dict[str, float]] = None,
+                          constraints: Dict[str, Tuple[float, float]] = None,
+                          **kwargs) -> Tuple[float, str]:
+    """
+    It runs a method and decodes the objective value and status returned by the solver.
+    :param method: the method to be run
+    :param objective: an alternative temporary objective function
+    :param constraints: alternative temporary constraints
+    :param kwargs: additional arguments to be passed to the method
+    :return: the objective value and the status of the solution
+    """
+    global _method
+    solver_kwargs = {'get_values': False}
+
+    if objective:
+        if hasattr(objective, 'keys'):
+            solver_kwargs['linear'] = objective.copy()
+        else:
+            solver_kwargs['linear'] = {str(objective): 1.0}
+
+    if constraints:
+        solver_kwargs['constraints'] = constraints
+
+    if 'minimize' in kwargs:
+        solver_kwargs['minimize'] = kwargs['minimize']
+
+    solution = _method.optimize(to_solver=True, solver_kwargs=solver_kwargs, **kwargs)
+    objective_value, status = decode_solver_solution(solution=solution)
+    return objective_value, status
+
+def process_reaction(args):
+    #print("process_reaction")
+    rxn, constraints, initial_state = args
+    #print("initial_state = ",initial_state)
+    if initial_state is None:
+        initial_state = {}
+    # Add more print statements to inspect the contents of lp, rxn, constraints if needed
+    # For example:
+    # print("Contents of lp:", lp)
+    # print("Contents of rxn:", rxn)
+    # print("Contents of constraints:", constraints)
+    min_val, _ = _run_method_and_decode(objective={rxn: 1.0}, constraints=constraints, minimize=True, initial_state = initial_state)
+    max_val, _ = _run_method_and_decode(objective={rxn: 1.0}, constraints=constraints, minimize=False, initial_state = initial_state)
+    return rxn, min_val, max_val
+
+
+def ifva_parallel(model: Union['Model', 'MetabolicModel', 'RegulatoryModel'],
+                  fraction: float = 1.0,
+                  reactions: Sequence[str] = None,
+                  objective: Union[str, Dict[str, float]] = None,
+                  constraints: Dict[str, Tuple[float, float]] = None,
+                  initial_state: Dict[str, float] = None,
+                  model_path: str = None,
+                  trn_path: str = None,
+                  method: str = 'srfba',
+                  num_processes: int = None) -> pd.DataFrame:
+
+    if not reactions:
+        reactions = model.reactions.keys()
+    
+    num_reactions = len(reactions)
+    num_processes = min(num_processes,num_reactions)
+
+    if objective:
+        if hasattr(objective, 'keys'):
+            obj = next(iter(objective.keys()))
+        else:
+            obj = str(objective)
+    else:
+        obj = next(iter(model.objective)).id
+
+    if not constraints:
+        constraints = {}
+
+    LP = INTEGRATED_ANALYSIS_METHODS[method]
+    print("building _lp...",end="")
+    _lp = LP(model).build()
+    print("OK!")
+    objective_value, _ = run_method_and_decode(method=_lp, objective=objective, constraints=constraints,
+                                               initial_state=initial_state)
+    print("objective_value=",objective_value)
+    constraints[obj] = (fraction * objective_value, ModelConstants.REACTION_UPPER_BOUND)
+
+    args_list = [(rxn, constraints, initial_state) for rxn in reactions]
+
+    if num_processes is None:
+        num_processes = multiprocessing.cpu_count() - 2
+
+    fva_result = pd.DataFrame(
+        {
+            "minimum": np.zeros(num_reactions, dtype=float),
+            "maximum": np.zeros(num_reactions, dtype=float),
+        },
+        index=reactions,
+    )
+    chunk_size = num_reactions // num_processes
+    
+    print("chunk_size=",chunk_size)
+    print("num_processes=",num_processes)
+    # Create a ProcessPool instance
+    with Pool(processes=num_processes, initializer=_init_worker, initargs=(model_path,trn_path,)) as pool:
+        print("with Pool...")
+        # Use pool.map() instead of pool.imap_unordered() for ordered results
+        for rxn_id, value_min, value_max in pool.imap_unordered(process_reaction, args_list, chunksize=chunk_size):
+            # Update your DataFrame with the results
+            fva_result.at[rxn_id, "minimum"] = value_min
+            fva_result.at[rxn_id, "maximum"] = value_max
+
+    return fva_result
 
 def isingle_gene_deletion(model: Union['Model', 'MetabolicModel', 'RegulatoryModel'],
                           genes: Sequence[str] = None,
@@ -221,38 +366,195 @@ def isingle_gene_deletion(model: Union['Model', 'MetabolicModel', 'RegulatoryMod
     :param method: the method to be used for the simulation. Available methods: 'rfba', 'srfba'. Default: 'srfba'
     :return: a DataFrame with the results of the simulation
     """
+    
+    if not constraints:
+        constraints = {}
+        
     if not initial_state:
         initial_state = {}
 
     if not genes:
-        genes = model.genes.keys()
+        genes = model.yield_genes()
+    else:
+        genes = [model.genes[gene] for gene in genes if gene in model.genes]
 
     LP = INTEGRATED_ANALYSIS_METHODS[method]
     lp = LP(model).build()
+    
+    wt_objective_value, wt_status = run_method_and_decode(method=lp, constraints=constraints)
+    print(f"WT {wt_objective_value=} {wt_status=}")
+    state = {gene.id: max(gene.coefficients) for gene in model.yield_genes()}
 
     result = {}
     for gene in genes:
+        print(f"{gene=}")
+        igene_coefficient = initial_state.pop(gene.id, None)
+        initial_state[gene.id] = 0.0
+        
+        #real_initial_state = {}
+        #if gene.is_regulator():
+            #print("is_regulator, setting real_initial_state...", end='')
+        real_initial_state = get_real_initial_state(model, initial_state=initial_state)
+            #print("OK!")
+        
+        gene_coefficient = state.pop(gene.id, 0.0)
+        state[gene.id] = 0.0
+        
+        gene_constraints = {}
+        for reaction in gene.yield_reactions():
 
-        gene_coefficient = initial_state.pop(gene, None)
-        initial_state[gene] = 0.0
+            if reaction.gpr.is_none:
+                continue
 
-        solution, status = run_method_and_decode(method=lp, constraints=constraints, initial_state=initial_state)
+            gpr_eval = reaction.gpr.evaluate(values=state)
 
-        result[gene] = [solution, status]
+            if gpr_eval:
+                continue
 
-        if gene_coefficient is not None:
-            initial_state[gene] = gene_coefficient
+            gene_constraints[reaction.id] = (0.0, 0.0)
+        
+        if gene_constraints:
+            print("Gene has constraints, running run_method_and_decode...", end='')
+            #solution, status = run_method_and_decode(method=lp, constraints=gene_constraints, initial_state=real_initial_state)
+            solution, status = run_method_and_decode(method=lp, constraints={**gene_constraints, **real_initial_state})
+            result[gene.id] = [solution, status]
+            print("OK!")
+            print(f"{solution=}, {status=}")
         else:
-            initial_state.pop(gene)
+            result[gene.id] = [solution, status]
+            print(f"NO constraints... {solution=}, {status=}")
 
+        if igene_coefficient is not None:
+            initial_state[gene.id] = igene_coefficient
+        else:
+            initial_state.pop(gene.id)
+        
+        state[gene.id] = gene_coefficient
     return pd.DataFrame.from_dict(data=result, orient='index', columns=['growth', 'status'])
 
+def regulatory_single_gene_deletion(model: Union['Model', 'MetabolicModel', 'RegulatoryModel'],
+                          genes: Sequence[str] = None,
+                          constraints: Dict[str, Tuple[float, float]] = None,
+                          initial_state: Dict[str, float] = None,
+                          method: str = 'srfba') -> pd.DataFrame:
+    """
+    Integrated single gene deletion analysis of an integrated Metabolic-Regulatory model.
+    Integrated single gene deletion analysis is a method to determine the effect of deleting each gene
+    in a model.
+    It can be used to identify the genes that are essential for the growth of a cell.
+    In MEWpy, single gene deletion analysis is performed by solving a linear problem for each gene in the model.
+    A gene knockout can switch off reactions associated with the gene, only if the gene is essential for the reaction.
+    The methods RFBA and SRFBA can determine if the gene is essential for the growth of a cell.
+
+    :param model: an integrated metabolic-regulatory model to be simulated
+    :param genes: the genes to be simulated. If None, all genes are simulated (default: None)
+    :param constraints: additional constraints to be added to the model. If None, no additional constraints are added
+    :param initial_state: the initial state of the model. If None, the default initial state is used (default: None)
+    :param method: the method to be used for the simulation. Available methods: 'rfba', 'srfba'. Default: 'srfba'
+    :return: a DataFrame with the results of the simulation
+    """
+    
+    if not constraints:
+        constraints = {}
+        
+    if not initial_state:
+        initial_state = {}
+
+    if not genes:
+        genes = model.yield_genes()
+    else:
+        genes = [model.genes[gene] for gene in genes if gene in model.genes]
+    
+    #LP = INTEGRATED_ANALYSIS_METHODS[method]
+    #print(f"Building model using {method=}...", end=" ")
+    #lp = LP(model).build()
+    #print("OK!")
+    print(f"Building model using fba...", end=" ")
+    lp = FBA(model).build()
+    print("OK!")
+    print("Computing FVA...", end="")
+    file_path = "..\\data\\models\\fva_df\\Recon3D_SIRT1_generic_DietHP.parquet"
+    absolute_path = os.path.abspath(file_path)
+    #fva_sol = fva(model, fraction=0.95)
+    fva_sol = pd.read_parquet(absolute_path)
+    print("OK!")
+    wt_objective_value, wt_status = run_method_and_decode(method=lp, constraints=constraints)
+    print(f"WT {wt_objective_value=} {wt_status=}")
+    
+    state = {gene.id: max(gene.coefficients) for gene in model.yield_genes()}
+
+    result = {}
+    for gene in genes:
+        print(f"{gene=}")
+        igene_coefficient = initial_state.pop(gene.id, None)
+        initial_state[gene.id] = 0.0
+        
+        #real_initial_state = {}
+        #if gene.is_regulator():
+            #print("is_regulator, setting real_initial_state...", end='')
+        real_initial_state = get_real_initial_state(model, initial_state=initial_state)
+            #print("OK!")
+        
+        constraints = {**state,**real_initial_state}
+        
+        gene_constraints = {g:v for g,v in constraints.items() if 'gene' in model.get(g).types}
+        
+        rxn_constraints = {}
+        for g in gene_constraints:
+            for reaction in model.get(g).reactions:
+                rxn = model.get(reaction)
+                gpr_eval = rxn.gpr.evaluate(values=gene_constraints)
+                if gpr_eval <= 1.0:
+                    #wt_flux = reference[reaction]
+                        
+                    _min = fva_sol.loc[reaction].minimum
+                    _max = fva_sol.loc[reaction].maximum
+                    rxn_constraints[reaction] = (_min*gpr_eval, _max*gpr_eval)
+        
+        if gene_constraints:
+            print("Gene has constraints, running run_method_and_decode...", end='')
+            #solution, status = run_method_and_decode(method=lp, constraints=gene_constraints, initial_state=real_initial_state)
+            solution, status = run_method_and_decode(method=lp, constraints=rxn_constraints)
+            result[gene.id] = [solution, status]
+            print("OK!")
+            print(f"{solution=}, {status=}")
+        else:
+            result[gene.id] = [float(wt_objective_value), str(wt_status)]
+            print(f"NO constraints... {wt_objective_value=}, {wt_status=}")
+
+        if igene_coefficient is not None:
+            initial_state[gene.id] = igene_coefficient
+        else:
+            initial_state.pop(gene.id)
+        
+    return pd.DataFrame.from_dict(data=result, orient='index', columns=['growth', 'status'])
+
+def process_isingle_reaction(args):
+    #print("process_reaction")
+    reaction, constraints, initial_state = args
+    #print("initial_state = ",initial_state)
+    if initial_state is None:
+        initial_state = {}
+    
+    _ = constraints.pop(reaction, None)
+    constraints[reaction] = (0.0, 0.0)
+
+    # Add more print statements to inspect the contents of lp, rxn, constraints if needed
+    # For example:
+    # print("Contents of lp:", lp)
+    # print("Contents of rxn:", rxn)
+    # print("Contents of constraints:", constraints)
+    solution, status = _run_method_and_decode(constraints=constraints, minimize=True, initial_state = initial_state)
+    return reaction, solution, status
 
 def isingle_reaction_deletion(model: Union['Model', 'MetabolicModel', 'RegulatoryModel'],
                               reactions: Sequence[str] = None,
                               constraints: Dict[str, Tuple[float, float]] = None,
                               initial_state: Dict[str, float] = None,
-                              method: str = 'srfba') -> pd.DataFrame:
+                              model_path: str = None,
+                              trn_path: str = None,
+                              method: str = 'srfba',
+                              num_processes: int = None) -> pd.DataFrame:
     """
     Integrated single reaction deletion analysis of an integrated Metabolic-Regulatory model.
     Integrated single reaction deletion analysis is a method to determine the effect of deleting each reaction
@@ -273,24 +575,20 @@ def isingle_reaction_deletion(model: Union['Model', 'MetabolicModel', 'Regulator
 
     if not reactions:
         reactions = model.reactions.keys()
+    
+    num_reactions = len(reactions)
+    num_processes = min(num_processes,num_reactions)
+    chunk_size = num_reactions // num_processes
 
-    LP = INTEGRATED_ANALYSIS_METHODS[method]
-    lp = LP(model).build()
+    #LP = INTEGRATED_ANALYSIS_METHODS[method]
+    #lp = LP(model).build()
+    args_list = [(rxn, constraints, initial_state) for rxn in reactions]
 
     result = {}
-    for reaction in reactions:
+    with Pool(processes=num_processes, initializer=_init_worker, initargs=(model_path,trn_path,)) as pool:
 
-        reaction_constraint = constraints.pop(reaction, None)
-        constraints[reaction] = (0.0, 0.0)
-
-        solution, status = run_method_and_decode(method=lp, constraints=constraints, initial_state=initial_state)
-
-        result[reaction] = [solution, status]
-
-        if reaction_constraint is not None:
-            constraints[reaction] = reaction_constraint
-        else:
-            constraints.pop(reaction)
+        for rxn, solution, status in pool.imap_unordered(process_isingle_reaction, args_list, chunksize=chunk_size):
+            result[rxn] = [solution, status]
 
     return pd.DataFrame.from_dict(data=result, orient='index', columns=['growth', 'status'])
 
@@ -383,6 +681,8 @@ def _decode_interactions(model: Union['Model', 'MetabolicModel', 'RegulatoryMode
     :param state: the state of the model
     :return: a dictionary with the state of each gene
     """
+    
+    print("[Module _decode_interactions] running")
     target_state = {}
     for interaction in model.yield_interactions():
 
