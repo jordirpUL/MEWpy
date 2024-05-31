@@ -227,7 +227,7 @@ def _init_worker(model_path, trn_path, method='srfba'):
     for rxn in model.reactions.keys():
         if "sink" in rxn:
             model.get(rxn).bounds = (0,0)
-    model.objective = {"biomass_reaction":1.0, "R_SIRT1":0.001}
+    model.objective = {"biomass_reaction":1.0}
     print("Building LP...")
     # Assuming you can load the model using a path or identifier:
     LP = INTEGRATED_ANALYSIS_METHODS[method]
